@@ -26,10 +26,11 @@ import org.junit.Before;
 import org.nanoframework.commons.loader.PropertiesLoader;
 import org.nanoframework.commons.support.logging.Logger;
 import org.nanoframework.commons.support.logging.LoggerFactory;
-import org.nanoframework.commons.util.MapBuilder;
+import org.nanoframework.concurrent.scheduler.SchedulerFactory;
 import org.nanoframework.core.component.Components;
 import org.nanoframework.core.plugins.defaults.DefaultPluginLoader;
-import org.nanoframework.concurrent.scheduler.SchedulerFactory;
+
+import com.google.common.collect.ImmutableMap;
 
 /**
  *
@@ -41,7 +42,7 @@ public abstract class PluginLoaderInit {
     
     @Before
     public void init() throws Throwable {
-        final Map<String, String> map = MapBuilder.<String, String>create().put("context", "/test-context.properties").build();
+        final Map<String, String> map = ImmutableMap.<String, String>builder().put("context", "/test-context.properties").build();
         new DefaultPluginLoader().init(new ServletConfig() {
             
             @Override

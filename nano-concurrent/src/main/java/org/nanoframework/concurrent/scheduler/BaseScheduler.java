@@ -17,6 +17,7 @@ package org.nanoframework.concurrent.scheduler;
 
 import java.util.Date;
 import java.util.Map;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -33,23 +34,17 @@ import com.google.common.collect.Maps;
  * @since 1.3
  */
 public abstract class BaseScheduler implements Runnable, Cloneable {
-    /**
-     * @deprecated 请更换Logger名，现在使用LOGGER替代LOG的命名，这个静态常量将在后续版本移除
-     */
-    @Deprecated
-    protected static final Logger LOG = LoggerFactory.getLogger(BaseScheduler.class);
     protected static final Logger LOGGER = LoggerFactory.getLogger(BaseScheduler.class);
-
+    private static Map<String, AtomicLong> INDEX = Maps.newHashMap();
+    
     private SchedulerConfig config;
     private boolean close = true;
     private boolean closed = true;
-    private boolean remove = false;
-    private boolean isRunning = false;
-    private int nowTimes = 0;
+    private boolean remove;
+    private boolean isRunning;
+    private int nowTimes;
     private Object LOCK = new Object();
     private AtomicBoolean isLock = new AtomicBoolean(false);
-    private static Map<String, AtomicLong> index = Maps.newHashMap();
-    private SchedulerAnalysis analysis = SchedulerAnalysis.newInstance();
     private SchedulerFactory factory = SchedulerFactory.getInstance();
     
     public BaseScheduler() {
@@ -70,29 +65,20 @@ public abstract class BaseScheduler implements Runnable, Cloneable {
             try {
                 if (config.getLazy()) {
                     long delay = delay();
-                    LOGGER.warn("启动延时: " + delay + "ms");
+                    LOGGER.warn("启动延时: {}ms", delay);
                     thisWait(delay);
                 }
             } catch (final Throwable e) {
-                LOGGER.error("Lazy error: " + e.getMessage());
+                LOGGER.error("Lazy error: {}", e.getMessage());
             }
 
             close = false;
             closed = false;
             remove = false;
             while (!close && !config.getService().isShutdown()) {
-                final long start = System.currentTimeMillis();
                 process();
-                try {
-                    analysis.executing.incrementAndGet();
-                    analysis.putPerformCycle(System.currentTimeMillis() - start);
-                } catch (final Throwable e) {
-                    LOGGER.error("Analysis perform cycle error: {}", e.getMessage());
-                }
             }
-
         } finally {
-            // 保证结束Scheduler后能够正常的切换到Stop列表中，需要先设置close = false
             close = false;
             closed = true;
             factory.close(this);
@@ -107,14 +93,12 @@ public abstract class BaseScheduler implements Runnable, Cloneable {
                     try {
                         before();
                     } catch (final Throwable e) {
-                        analysis.beforeException.incrementAndGet();
                         throw e;
                     }
 
                 try {
                     execute();
                 } catch (final Throwable e) {
-                    analysis.executeException.incrementAndGet();
                     throw e;
                 }
 
@@ -122,7 +106,6 @@ public abstract class BaseScheduler implements Runnable, Cloneable {
                     try {
                         after();
                     } catch (final Throwable e) {
-                        analysis.afterException.incrementAndGet();
                         throw e;
                     }
 
@@ -130,39 +113,34 @@ public abstract class BaseScheduler implements Runnable, Cloneable {
                     isRunning = true;
 
             } catch (final Throwable e) {
-                LOGGER.error("任务运行异常: " + e.getMessage(), e);
+                LOGGER.error("任务运行异常: {}", e.getMessage());
                 thisWait(100);
             } finally {
                 finallyProcess();
             }
-
         } else {
             try {
                 try {
                     before();
                 } catch (final Throwable e) {
-                    analysis.beforeException.incrementAndGet();
                     throw e;
                 }
 
                 try {
                     execute();
                 } catch (final Throwable e) {
-                    analysis.executeException.incrementAndGet();
                     throw e;
                 }
 
                 try {
                     after();
                 } catch (Throwable e) {
-                    analysis.afterException.incrementAndGet();
                     throw e;
                 }
 
             } catch (final Throwable e) {
-                LOGGER.error("任务运行异常: " + e.getMessage(), e);
+                LOGGER.error("任务运行异常: {}", e.getMessage());
                 thisWait(100);
-
             } finally {
                 finallyProcess();
             }
@@ -173,11 +151,12 @@ public abstract class BaseScheduler implements Runnable, Cloneable {
      * 逻辑调用结束后处理阶段
      */
     private void finallyProcess() {
-        if (config.getService() == null) {
+        final ThreadPoolExecutor service = config.getService();
+        if (service == null) {
             throw new SchedulerException("ThreadPoolExecutor不能为空");
         }
 
-        if (!close && !config.getService().isShutdown()) {
+        if (!close && !service.isShutdown()) {
             long interval = delay();
             if (config.getRunNumberOfTimes() == 0) {
                 thisWait(interval);
@@ -306,27 +285,20 @@ public abstract class BaseScheduler implements Runnable, Cloneable {
     }
 
     public long getIndex(final String group) {
-        AtomicLong idx;
-        if ((idx = index.get(group)) == null) {
-            index.put(group, idx = new AtomicLong());
+        final AtomicLong idx = INDEX.get(group);
+        if (idx == null) {
+            final AtomicLong newIdx = new AtomicLong();
+            INDEX.put(group, newIdx);
+            return newIdx.getAndIncrement();
         }
 
         return idx.getAndIncrement();
     }
-
-    /**
-     * @return the analysis
-     */
-    public SchedulerAnalysis getAnalysis() {
-        return analysis;
-    }
-
+    
     @Override
-    public BaseScheduler clone() {
+    protected BaseScheduler clone() {
         try {
-            final BaseScheduler scheduler = (BaseScheduler) super.clone();
-            scheduler.analysis = SchedulerAnalysis.newInstance();
-            return scheduler;
+            return (BaseScheduler) super.clone();
         } catch (final CloneNotSupportedException e) {
             throw new SchedulerException(e.getMessage(), e);
         }
